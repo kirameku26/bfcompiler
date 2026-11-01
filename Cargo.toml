@@ -1,0 +1,17 @@
+[package]
+name = "bfcompile"
+version = "0.1.0"
+edition = "2024"
+description = "A Brainfuck AOT compiler for ARM64 and x86-64"
+license = "MIT"
+
+[lib]
+name = "bfcompile"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bfcompile"
+path = "src/main.rs"
+
+[dependencies]
+
