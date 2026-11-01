@@ -1,0 +1,5 @@
+*.bf text eol=lf
+*.args text eol=lf
+*.status text eol=lf
+*.in -text
+*.out -text

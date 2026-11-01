@@ -25,6 +25,11 @@ struct bf_configuration {
     uint32_t output_encoding;
 };
 /* A strong definition in an extended object overrides this legacy default. */
+#ifdef _WIN32
+/* GNU as retains a weak definition's section offset in direct references.
+ * Keep the fallback at offset zero so overriding it does not shift reads. */
+__attribute__((section(".rdata$bf_config")))
+#endif
 __attribute__((weak)) const struct bf_configuration bf_config = {0, 0, 0, 0};
 static uint32_t output_encoding = BFC_OUTPUT_ENCODING;
 

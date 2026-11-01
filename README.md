@@ -175,6 +175,8 @@ cargo clippy --all-targets -- -D warnings
 
 The binary is `target/release/bfcompiler` (`bfcompiler.exe` on Windows). Tests compare generated programs against a reference interpreter. See [AGENTS.md](AGENTS.md) for development guidelines and optional cross-target checks.
 
+Run all [Brainfuck fixtures](tests/fixtures/README.md) with `cargo test --test fixtures -- --nocapture`. New `.bf` files with matching `.out` files are tested automatically at `-O0` and `-O2`.
+
 Run the transfer-loop timing sample with `cargo test --test performance -- --ignored --nocapture`; it includes process startup.
 
 ## License

@@ -26,6 +26,62 @@ impl Drop for TestDir {
 }
 
 #[test]
+fn standard_objects_keep_legacy_runtime_defaults_when_manually_linked() {
+    if Target::host_default().is_none() {
+        return;
+    }
+    let dir = TestDir::new();
+    let input = dir.0.join("source.bf");
+    fs::write(&input, b"-.>").unwrap();
+    let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime/runtime.c");
+    for format in ["-c", "-S"] {
+        let object = dir.0.join(if format == "-c" {
+            "source.o"
+        } else {
+            "source.s"
+        });
+        let compile = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
+            .arg(format)
+            .arg(&input)
+            .arg("-o")
+            .arg(&object)
+            .output()
+            .unwrap();
+        assert!(compile.status.success());
+        for optimize in ["-O0", "-O2", "-O3"] {
+            for runtime_first in [false, true] {
+                let executable = dir.0.join(if cfg!(windows) { "test.exe" } else { "test" });
+                let inputs = if runtime_first {
+                    [&runtime, &object]
+                } else {
+                    [&object, &runtime]
+                };
+                let link = Command::new(std::env::var_os("BFC_CC").unwrap_or_else(|| "cc".into()))
+                    .args([optimize, "-DBFC_TAPE_SIZE=1", "-DBFC_OUTPUT_UTF8=1"])
+                    .args(inputs)
+                    .arg("-o")
+                    .arg(&executable)
+                    .output()
+                    .unwrap();
+                assert!(
+                    link.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&link.stderr)
+                );
+                let output = Command::new(&executable).output().unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(2),
+                    "{format} {optimize} runtime_first={runtime_first}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(output.stdout, [0xc3, 0xbf]);
+            }
+        }
+    }
+}
+
+#[test]
 fn extended_widths_run_and_survive_manual_linking() {
     let Some(host) = Target::host_default() else {
         return;

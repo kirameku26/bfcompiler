@@ -70,7 +70,7 @@ jobs:
       - name: Cross-compile and run Linux programs
         env:
           BFC_TEST_LINUX_CROSS: ${{ matrix.target }}
-        run: cargo +stable test --locked --test cross_linux -- --nocapture
+        run: cargo +stable test --locked --test cross_linux --test fixtures -- --nocapture
 
   macos:
     name: macOS (${{ matrix.target }})
