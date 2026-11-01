@@ -1,3 +1,4 @@
+use crate::CellWidth;
 use crate::backend::{MachineCode, Relocation};
 use crate::ir::{Op, Program};
 
@@ -6,9 +7,55 @@ struct Emitter {
     relocations: Vec<Relocation>,
     errors: Vec<usize>,
     windows: bool,
+    width: CellWidth,
 }
 
 impl Emitter {
+    fn memory_prefix(&mut self) {
+        if self.width == CellWidth::Bits16 {
+            self.emit(&[0x66]);
+        }
+        self.emit(&[0x41]);
+    }
+    fn load(&mut self, register: u8) {
+        self.emit(&[0x41]);
+        match self.width {
+            CellWidth::Bits8 => self.emit(&[0x0f, 0xb6]),
+            CellWidth::Bits16 => self.emit(&[0x0f, 0xb7]),
+            CellWidth::Bits32 => self.emit(&[0x8b]),
+        }
+        self.emit(&[0x04 | (register << 3), 0x24]);
+    }
+    fn add(&mut self, amount: i64) {
+        let value = amount.rem_euclid(self.width.modulus()) as u32;
+        if value == 0 {
+            return;
+        }
+        self.memory_prefix();
+        self.emit(&[
+            if self.width == CellWidth::Bits8 {
+                0x80
+            } else {
+                0x81
+            },
+            0x04,
+            0x24,
+        ]);
+        self.emit(&value.to_le_bytes()[..self.width.bytes() as usize]);
+    }
+    fn clear(&mut self) {
+        self.memory_prefix();
+        self.emit(&[
+            if self.width == CellWidth::Bits8 {
+                0xc6
+            } else {
+                0xc7
+            },
+            0x04,
+            0x24,
+        ]);
+        self.emit(&[0; 4][..self.width.bytes() as usize]);
+    }
     fn emit(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
     }
@@ -41,7 +88,8 @@ impl Emitter {
                 Op::Move { amount, .. } => {
                     let mut remaining = amount.unsigned_abs();
                     while remaining != 0 {
-                        let chunk = remaining.min(i32::MAX as u64) as u32;
+                        let cells = remaining.min(i32::MAX as u64 / u64::from(self.width.bytes()));
+                        let chunk = cells as u32 * self.width.bytes();
                         if *amount > 0 {
                             self.emit(&[0x4c, 0x89, 0xf0, 0x4c, 0x29, 0xe0]); // rax = end - current
                         } else {
@@ -60,16 +108,11 @@ impl Emitter {
                             &[0x49, 0x81, 0xec]
                         });
                         self.emit(&chunk.to_le_bytes());
-                        remaining -= u64::from(chunk);
+                        remaining -= cells;
                     }
                 }
-                Op::Add { amount, .. } => {
-                    let value = amount.rem_euclid(256) as u8;
-                    if value != 0 {
-                        self.emit(&[0x41, 0x80, 0x04, 0x24, value]);
-                    }
-                }
-                Op::Clear { .. } => self.emit(&[0x41, 0xc6, 0x04, 0x24, 0x00]),
+                Op::Add { amount, .. } => self.add(*amount),
+                Op::Clear { .. } => self.clear(),
                 Op::Transfer {
                     offset,
                     factor,
@@ -78,32 +121,30 @@ impl Emitter {
                     if !matches!(offset, -1 | 1) || !matches!(factor, -1 | 1) {
                         return Err("invalid transfer operation".into());
                     }
-                    self.emit(&[0x41, 0x0f, 0xb6, 0x0c, 0x24]); // movzbl (r12), ecx
+                    self.load(1);
                     self.emit(&[0x85, 0xc9]); // test ecx, ecx
                     let skip = self.branch(&[0x0f, 0x84]);
-                    self.emit(&[0x41, 0x80, 0x2c, 0x24, 0x01]); // preserve first decrement if movement fails
+                    self.add(-1); // preserve first decrement if movement fails
                     self.ops(&[Op::Move {
                         amount: i64::from(*offset),
                         pos: *pos,
                     }])?;
-                    self.emit(if *factor == 1 {
-                        &[0x41, 0x00, 0x0c, 0x24]
-                    } else {
-                        &[0x41, 0x28, 0x0c, 0x24]
-                    });
+                    self.memory_prefix();
+                    let opcode = if *factor == 1 { 0x00 } else { 0x28 };
+                    self.emit(&[
+                        opcode + u8::from(self.width != CellWidth::Bits8),
+                        0x0c,
+                        0x24,
+                    ]);
                     self.ops(&[Op::Move {
                         amount: -i64::from(*offset),
                         pos: *pos,
                     }])?;
-                    self.emit(&[0x41, 0xc6, 0x04, 0x24, 0x00]);
+                    self.clear();
                     self.patch(skip, self.bytes.len())?;
                 }
                 Op::Output { .. } => {
-                    if self.windows {
-                        self.emit(&[0x41, 0x0f, 0xb6, 0x0c, 0x24]); // movzx ecx, byte [r12]
-                    } else {
-                        self.emit(&[0x41, 0x0f, 0xb6, 0x3c, 0x24]); // movzx edi, byte [r12]
-                    }
+                    self.load(if self.windows { 1 } else { 7 });
                     self.call("_bf_output");
                     self.emit(&[0x85, 0xc0]); // test eax, eax
                     self.error_if(&[0x0f, 0x85]);
@@ -116,11 +157,30 @@ impl Emitter {
                     let non_eof = self.branch(&[0x0f, 0x85]);
                     self.emit(&[0x31, 0xc0]); // xor eax, eax
                     self.patch(non_eof, self.bytes.len())?;
-                    self.emit(&[0x41, 0x88, 0x04, 0x24]); // mov [r12], al
+                    self.memory_prefix();
+                    self.emit(&[
+                        if self.width == CellWidth::Bits8 {
+                            0x88
+                        } else {
+                            0x89
+                        },
+                        0x04,
+                        0x24,
+                    ]);
                 }
                 Op::Loop { body, .. } => {
                     let start = self.bytes.len();
-                    self.emit(&[0x41, 0x80, 0x3c, 0x24, 0x00]); // cmp byte [r12], 0
+                    self.memory_prefix();
+                    self.emit(&[
+                        if self.width == CellWidth::Bits8 {
+                            0x80
+                        } else {
+                            0x83
+                        },
+                        0x3c,
+                        0x24,
+                        0,
+                    ]);
                     let end = self.branch(&[0x0f, 0x84]);
                     self.ops(body)?;
                     let back = self.branch(&[0xe9]);
@@ -138,11 +198,20 @@ pub fn compile(program: &Program) -> Result<MachineCode, String> {
 }
 
 pub fn compile_for(program: &Program, windows: bool) -> Result<MachineCode, String> {
+    compile_with_width(program, windows, CellWidth::Bits8)
+}
+
+pub fn compile_with_width(
+    program: &Program,
+    windows: bool,
+    width: CellWidth,
+) -> Result<MachineCode, String> {
     let mut e = Emitter {
         bytes: Vec::new(),
         relocations: Vec::new(),
         errors: Vec::new(),
         windows,
+        width,
     };
     // Four pushes leave RSP misaligned on entry, so reserve eight bytes before calls.
     e.emit(&[
@@ -192,6 +261,8 @@ pub fn compile_for(program: &Program, windows: bool) -> Result<MachineCode, Stri
     Ok(MachineCode {
         bytes: e.bytes,
         relocations: e.relocations,
+        config: None,
+        output_encoding: None,
     })
 }
 

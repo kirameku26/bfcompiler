@@ -1,12 +1,47 @@
 use crate::ir::{Op, Program};
 
 pub fn optimize(program: Program) -> Program {
+    optimize_with_width(program, CellWidth::Bits8)
+}
+
+/// Width of each wrapping unsigned tape cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CellWidth {
+    Bits8,
+    Bits16,
+    Bits32,
+}
+
+impl CellWidth {
+    pub fn bits(self) -> u32 {
+        match self {
+            Self::Bits8 => 8,
+            Self::Bits16 => 16,
+            Self::Bits32 => 32,
+        }
+    }
+
+    pub fn bytes(self) -> u32 {
+        self.bits() / 8
+    }
+
+    pub fn modulus(self) -> i64 {
+        match self {
+            Self::Bits8 => 1 << 8,
+            Self::Bits16 => 1 << 16,
+            Self::Bits32 => 1i64 << 32,
+        }
+    }
+}
+
+pub fn optimize_with_width(program: Program, width: CellWidth) -> Program {
+    let modulus = width.modulus();
     let mut out: Program = Vec::with_capacity(program.len());
     for op in program {
         let op = match op {
             Op::Loop { body, pos } => {
-                let body = optimize(body);
-                if matches!(body.as_slice(), [Op::Add { amount, .. }] if amount.rem_euclid(256) == 1 || amount.rem_euclid(256) == 255)
+                let body = optimize_with_width(body, width);
+                if matches!(body.as_slice(), [Op::Add { amount, .. }] if amount.rem_euclid(modulus) == 1 || amount.rem_euclid(modulus) == modulus - 1)
                 {
                     Op::Clear { pos }
                 } else if let [
@@ -15,14 +50,14 @@ pub fn optimize(program: Program) -> Program {
                     Op::Add { amount: dest, .. },
                     Op::Move { amount: back, .. },
                 ] = body.as_slice()
-                    && source.rem_euclid(256) == 255
+                    && source.rem_euclid(modulus) == modulus - 1
                     && (*offset == 1 || *offset == -1)
                     && *back == -*offset
-                    && (dest.rem_euclid(256) == 1 || dest.rem_euclid(256) == 255)
+                    && (dest.rem_euclid(modulus) == 1 || dest.rem_euclid(modulus) == modulus - 1)
                 {
                     Op::Transfer {
                         offset: *offset as i8,
-                        factor: if dest.rem_euclid(256) == 1 { 1 } else { -1 },
+                        factor: if dest.rem_euclid(modulus) == 1 { 1 } else { -1 },
                         pos,
                     }
                 } else {
@@ -58,7 +93,7 @@ pub fn optimize(program: Program) -> Program {
             other => out.push(other),
         }
     }
-    out.retain(|op| !matches!(op, Op::Add { amount, .. } if amount.rem_euclid(256) == 0));
+    out.retain(|op| !matches!(op, Op::Add { amount, .. } if amount.rem_euclid(modulus) == 0));
     out
 }
 
@@ -110,6 +145,25 @@ mod tests {
         ] {
             assert!(matches!(
                 optimize(parse(source).unwrap()).as_slice(),
+                [Op::Loop { .. }]
+            ));
+        }
+    }
+
+    #[test]
+    fn wider_cells_preserve_arithmetic_and_loop_semantics() {
+        let source = vec![b'+'; 256];
+        assert!(optimize_with_width(parse(&source).unwrap(), CellWidth::Bits8).is_empty());
+        for width in [CellWidth::Bits16, CellWidth::Bits32] {
+            assert!(matches!(
+                optimize_with_width(parse(&source).unwrap(), width).as_slice(),
+                [Op::Add { amount: 256, .. }]
+            ));
+            let mut loop_source = vec![b'['];
+            loop_source.extend(vec![b'+'; 255]);
+            loop_source.push(b']');
+            assert!(matches!(
+                optimize_with_width(parse(&loop_source).unwrap(), width).as_slice(),
                 [Op::Loop { .. }]
             ));
         }

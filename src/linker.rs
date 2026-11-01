@@ -24,6 +24,8 @@ pub fn link(
             _ if native => "cc",
             crate::Target::X86_64Linux => "x86_64-linux-gnu-gcc",
             crate::Target::Aarch64Linux => "aarch64-linux-gnu-gcc",
+            crate::Target::I386Linux => "i686-linux-gnu-gcc",
+            crate::Target::Riscv64Linux => "riscv64-linux-gnu-gcc",
             crate::Target::X86_64WindowsGnu => "x86_64-w64-mingw32-gcc",
             _ => "unavailable-darwin-cross-compiler",
         };
@@ -51,7 +53,7 @@ pub fn link(
         .arg("-o")
         .arg(output);
     if verbose {
-        eprintln!("bfcompile: {command:?}");
+        eprintln!("bfcompiler: {command:?}");
     }
     let result = command.output().map_err(|e| {
         CompileError::Link(format!(

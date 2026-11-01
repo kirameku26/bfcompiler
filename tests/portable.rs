@@ -1,10 +1,12 @@
-use bfcompile::{Target, compile_machine_for, compile_object_for};
+use bfcompiler::{Target, compile_machine_for, compile_object_for};
 
 #[test]
 fn cross_target_object_headers_and_relocations() {
     for (target, magic, machine) in [
         (Target::X86_64Linux, b"\x7fELF".as_slice(), 62u16),
         (Target::Aarch64Linux, b"\x7fELF".as_slice(), 183u16),
+        (Target::I386Linux, b"\x7fELF".as_slice(), 3u16),
+        (Target::Riscv64Linux, b"\x7fELF".as_slice(), 243u16),
         (Target::X86_64WindowsGnu, b"\x64\x86".as_slice(), 0x8664u16),
     ] {
         let object = compile_object_for(b",[>+<-]>.", true, target).unwrap();
@@ -36,6 +38,8 @@ fn clear_loops_generate_smaller_code_for_all_targets() {
         Target::X86_64Darwin,
         Target::Aarch64Linux,
         Target::X86_64Linux,
+        Target::I386Linux,
+        Target::Riscv64Linux,
         Target::X86_64WindowsGnu,
     ] {
         let source = b"[-][+]";
@@ -60,6 +64,8 @@ fn grouped_pointer_moves_reduce_generated_code_size() {
         Target::X86_64Darwin,
         Target::Aarch64Linux,
         Target::X86_64Linux,
+        Target::I386Linux,
+        Target::Riscv64Linux,
         Target::X86_64WindowsGnu,
     ] {
         let source = vec![b'>'; 10_000];
@@ -84,7 +90,7 @@ fn rendered_x86_assembly_shows_generated_instructions() {
         for optimize in [false, true] {
             let code = compile_machine_for(b",[->+<]>>[-<->]<<[>+<-]>.", optimize, target).unwrap();
             let assembly =
-                bfcompile::backend::x86_64::assembly_for(&code, target == Target::X86_64Darwin);
+                bfcompiler::backend::x86_64::assembly_for(&code, target == Target::X86_64Darwin);
             assert!(!assembly.contains(".byte"), "{target:?}:\n{assembly}");
             assert!(assembly.contains("movzbl"));
             assert!(assembly.contains(".Lbf_"));
@@ -99,8 +105,8 @@ fn grouped_move_assembly_renders_large_immediates() {
     for target in [Target::Aarch64Darwin, Target::X86_64Darwin] {
         let code = compile_machine_for(&source, true, target).unwrap();
         let assembly = match target {
-            Target::Aarch64Darwin => bfcompile::backend::assembly::render(&code),
-            _ => bfcompile::backend::x86_64::assembly_for(&code, true),
+            Target::Aarch64Darwin => bfcompiler::backend::assembly::render(&code),
+            _ => bfcompiler::backend::x86_64::assembly_for(&code, true),
         };
         assert!(
             !assembly.contains(".long") && !assembly.contains(".byte"),
@@ -121,7 +127,7 @@ fn mode_validation_works_for_cross_target_object_and_assembly_output() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bfcompile-modes-{}-{stamp}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("bfcompiler-modes-{}-{stamp}", std::process::id()));
     fs::create_dir(&dir).unwrap();
     let source = dir.join("test.bf");
     fs::write(&source, b"+").unwrap();
@@ -130,11 +136,13 @@ fn mode_validation_works_for_cross_target_object_and_assembly_output() {
         "x86_64-apple-darwin",
         "aarch64-unknown-linux-gnu",
         "x86_64-unknown-linux-gnu",
+        "i686-unknown-linux-gnu",
+        "riscv64gc-unknown-linux-gnu",
         "x86_64-pc-windows-gnu",
     ] {
         for format in ["-c", "-S"] {
             let path = dir.join(format!("{target}-{}", &format[1..]));
-            let result = Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+            let result = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
                 .args(["--target", target, "--mode=standard", format])
                 .arg(&source)
                 .arg("-o")
@@ -147,15 +155,15 @@ fn mode_validation_works_for_cross_target_object_and_assembly_output() {
                 String::from_utf8_lossy(&result.stderr)
             );
             assert!(path.exists());
-            let result = Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+            let result = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
                 .args(["--target", target, "--mode=extended", format])
                 .arg(&source)
                 .arg("-o")
                 .arg(&path)
                 .output()
                 .unwrap();
-            assert!(!result.status.success());
-            assert!(String::from_utf8_lossy(&result.stderr).contains("requires executable output"));
+            assert!(result.status.success());
+            assert!(result.stderr.is_empty());
         }
     }
     let _ = fs::remove_dir_all(dir);
@@ -174,13 +182,14 @@ fn native_compilation_and_execution() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bfcompile-native-{}-{stamp}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("bfcompiler-native-{}-{stamp}", std::process::id()));
     fs::create_dir(&dir).unwrap();
     let source = dir.join("test.bf");
     let executable = dir.join(if cfg!(windows) { "test.exe" } else { "test" });
     fs::write(&source, b",[>+<-]>.").unwrap();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+        Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
             .arg(&source)
             .arg("-o")
             .arg(&executable)
@@ -212,26 +221,50 @@ fn windows_x64_calling_convention_runs_under_rosetta() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bfcompile-abi-{}-{stamp}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("bfcompiler-abi-{}-{stamp}", std::process::id()));
     fs::create_dir(&dir).unwrap();
-    let code = compile_machine_for(b",[->+<]>.", true, Target::X86_64WindowsGnu).unwrap();
-    let object = bfcompile::object::macho::write_object_for(&code, true).unwrap();
-    let object_path = dir.join("test.o");
-    let harness = dir.join("harness.c");
-    let executable = dir.join("test");
-    fs::write(&object_path, object).unwrap();
-    fs::write(&harness, include_str!("windows_abi_harness.c")).unwrap();
-    assert!(
-        Command::new("cc")
-            .args(["-arch", "x86_64"])
-            .arg(&harness)
-            .arg(&object_path)
-            .arg("-o")
-            .arg(&executable)
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(Command::new(executable).status().unwrap().success());
+    for width in [
+        bfcompiler::CellWidth::Bits8,
+        bfcompiler::CellWidth::Bits16,
+        bfcompiler::CellWidth::Bits32,
+    ] {
+        let mut source = vec![b','];
+        source.extend(vec![b'+'; 256]);
+        source.extend_from_slice(b"[->+<]>.");
+        let code = bfcompiler::compile_machine_with_config(
+            &source,
+            true,
+            Target::X86_64WindowsGnu,
+            bfcompiler::RuntimeConfig {
+                tape_size: 2,
+                cell_width: width,
+                output_utf8: false,
+            },
+        )
+        .unwrap();
+        let object = bfcompiler::object::macho::write_object_for(&code, true).unwrap();
+        let object_path = dir.join("test.o");
+        let harness = dir.join("harness.c");
+        let executable = dir.join("test");
+        fs::write(&object_path, object).unwrap();
+        fs::write(&harness, include_str!("windows_abi_harness.c")).unwrap();
+        assert!(
+            Command::new("cc")
+                .args(["-arch", "x86_64"])
+                .arg(if width == bfcompiler::CellWidth::Bits8 {
+                    "-DEXPECTED=65"
+                } else {
+                    "-DEXPECTED=321"
+                })
+                .arg(&harness)
+                .arg(&object_path)
+                .arg("-o")
+                .arg(&executable)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(Command::new(executable).status().unwrap().success());
+    }
     let _ = fs::remove_dir_all(dir);
 }

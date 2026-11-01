@@ -17,7 +17,7 @@ impl TestDir {
             .as_nanos();
         let sequence = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "bfcompile-test-{}-{stamp}-{sequence}",
+            "bfcompiler-test-{}-{stamp}-{sequence}",
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();
@@ -36,7 +36,7 @@ fn compile(source: &[u8], extra: &[&str]) -> (TestDir, PathBuf) {
     let source_path = dir.0.join("program.bf");
     let executable = dir.0.join("program");
     fs::write(&source_path, source).unwrap();
-    let status = Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+    let status = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
         .args(extra)
         .arg(&source_path)
         .arg("-o")
@@ -85,7 +85,7 @@ fn syntax_error_does_not_replace_an_existing_output() {
     let output = dir.0.join("keep");
     fs::write(&source, b"[").unwrap();
     fs::write(&output, b"keep me").unwrap();
-    let status = Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+    let status = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
         .arg(source)
         .arg("-o")
         .arg(&output)
@@ -102,7 +102,7 @@ fn assembly_can_be_assembled_and_linked() {
     let assembly = dir.0.join("sample.s");
     let executable = dir.0.join("sample");
     fs::write(&source, b",[>+<-]>.").unwrap();
-    let status = Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+    let status = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
         .args(["-S", "-O2"])
         .arg(&source)
         .arg("-o")
@@ -142,7 +142,7 @@ fn optimization_options_and_invalid_options() {
     let asm2 = dir.0.join("two.s");
     for (opt, path) in [("-O0", &asm0), ("-O2", &asm2)] {
         assert!(
-            Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+            Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
                 .args(["-S", opt])
                 .arg(&source)
                 .arg("-o")
@@ -154,7 +154,7 @@ fn optimization_options_and_invalid_options() {
     }
     assert!(fs::metadata(asm0).unwrap().len() > fs::metadata(asm2).unwrap().len());
     assert!(
-        !Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+        !Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
             .args(["-O9"])
             .arg(source)
             .output()
@@ -176,7 +176,7 @@ fn x86_64_target_runs_and_assembly_round_trips() {
         } else {
             executable.clone()
         };
-        let mut compiler = Command::new(env!("CARGO_BIN_EXE_bfcompile"));
+        let mut compiler = Command::new(env!("CARGO_BIN_EXE_bfcompiler"));
         compiler.args(["--target", "x86_64-apple-darwin"]);
         if assembly {
             compiler.arg("-S");
@@ -294,6 +294,110 @@ fn output_encoding_preserves_bytes_or_encodes_cell_as_unicode() {
 }
 
 #[test]
+fn runtime_encodes_full_unicode_and_rejects_invalid_values() {
+    let dir = TestDir::new();
+    let harness = dir.0.join("unicode.c");
+    let executable = dir.0.join("unicode");
+    fs::write(
+        &harness,
+        r#"
+#include <stdint.h>
+#include <stddef.h>
+extern int bf_output(uint32_t);
+int bf_program(uint8_t *tape, size_t size) {
+    (void)tape; (void)size;
+    if (bf_output(0x41) || bf_output(0xe9) || bf_output(0x3042) || bf_output(0x1f600) ||
+        bf_output(0xd7ff) || bf_output(0xe000) || bf_output(0x10ffff)) return 1;
+    if (bf_output(0xd800) != 2 || bf_output(0xdfff) != 2 || bf_output(0x110000) != 2 ||
+        bf_output(UINT32_MAX) != 2) return 1;
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    assert!(
+        Command::new("cc")
+            .arg("-DBFC_OUTPUT_UTF8=1")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/runtime.c"))
+            .arg(&harness)
+            .arg("-o")
+            .arg(&executable)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let result = Command::new(executable).output().unwrap();
+    assert!(result.status.success());
+    assert_eq!(result.stdout, "Aéあ😀\u{d7ff}\u{e000}\u{10ffff}".as_bytes());
+}
+
+#[test]
+fn runtime_reports_invalid_unicode_as_execution_error() {
+    let dir = TestDir::new();
+    let harness = dir.0.join("invalid_unicode.c");
+    let executable = dir.0.join("invalid_unicode");
+    fs::write(
+        &harness,
+        r#"
+#include <stdint.h>
+#include <stddef.h>
+extern int bf_output(uint32_t);
+int bf_program(uint8_t *tape, size_t size) {
+    (void)tape; (void)size;
+    return bf_output(0xd800);
+}
+"#,
+    )
+    .unwrap();
+    assert!(
+        Command::new("cc")
+            .arg("-DBFC_OUTPUT_UTF8=1")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/runtime.c"))
+            .arg(&harness)
+            .arg("-o")
+            .arg(&executable)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let result = Command::new(executable).output().unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+}
+
+#[test]
+fn runtime_byte_output_uses_low_eight_bits() {
+    let dir = TestDir::new();
+    let harness = dir.0.join("bytes.c");
+    let executable = dir.0.join("bytes");
+    fs::write(
+        &harness,
+        r#"
+#include <stdint.h>
+#include <stddef.h>
+extern int bf_output(uint32_t);
+int bf_program(uint8_t *tape, size_t size) {
+    (void)tape; (void)size;
+    return bf_output(0x1234) || bf_output(UINT32_MAX);
+}
+"#,
+    )
+    .unwrap();
+    assert!(
+        Command::new("cc")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/runtime.c"))
+            .arg(&harness)
+            .arg("-o")
+            .arg(&executable)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let result = Command::new(executable).output().unwrap();
+    assert!(result.status.success());
+    assert_eq!(result.stdout, [0x34, 0xff]);
+}
+#[test]
 fn tape_size_defaults_and_custom_boundary() {
     let source = vec![b'>'; 30_000];
     let (_dir, executable) = compile(&source[..29_999], &[]);
@@ -327,7 +431,7 @@ fn manually_linked_standard_object_uses_standard_tape_size() {
     let object = dir.0.join("boundary.o");
     fs::write(&source, vec![b'>'; 30_000]).unwrap();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+        Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
             .args(["--mode", "standard", "-c"])
             .arg(&source)
             .arg("-o")
@@ -361,6 +465,50 @@ fn manually_linked_standard_object_uses_standard_tape_size() {
 }
 
 #[test]
+fn extended_object_and_assembly_link_with_runtime_settings() {
+    let dir = TestDir::new();
+    let source = dir.0.join("extended.bf");
+    fs::write(&source, b">-.").unwrap();
+    for format in ["-c", "-S"] {
+        let output = dir.0.join(if format == "-c" {
+            "program.o"
+        } else {
+            "program.s"
+        });
+        let executable = dir
+            .0
+            .join(if format == "-c" { "object" } else { "assembly" });
+        let result = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
+            .args([
+                "--mode=extended",
+                "--tape-size=2",
+                "--output-encoding=utf-8",
+                format,
+            ])
+            .arg(&source)
+            .arg("-o")
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        assert!(result.stderr.is_empty());
+        assert!(
+            Command::new("cc")
+                .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/runtime.c"))
+                .arg(&output)
+                .arg("-o")
+                .arg(&executable)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let result = Command::new(executable).output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, [0xc3, 0xbf]);
+    }
+}
+
+#[test]
 fn invalid_runtime_options_are_rejected() {
     let dir = TestDir::new();
     let source = dir.0.join("test.bf");
@@ -374,11 +522,9 @@ fn invalid_runtime_options_are_rejected() {
         &["--tape-size=30000"][..],
         &["--output-encoding=bytes"][..],
         &["--mode=unknown"][..],
-        &["-c", "--mode=extended"][..],
-        &["-S", "--mode=extended"][..],
     ] {
         assert!(
-            !Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+            !Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
                 .args(args)
                 .arg(&source)
                 .output()
@@ -418,8 +564,8 @@ fn clear_loops_match_unoptimized_programs() {
 #[test]
 fn copied_compiler_runs_from_another_directory() {
     let dir = TestDir::new();
-    let compiler = dir.0.join("bfcompile");
-    fs::copy(env!("CARGO_BIN_EXE_bfcompile"), &compiler).unwrap();
+    let compiler = dir.0.join("bfcompiler");
+    fs::copy(env!("CARGO_BIN_EXE_bfcompiler"), &compiler).unwrap();
     fs::write(
         dir.0.join("test.bf"),
         b"+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.",
@@ -454,7 +600,7 @@ fn assembly_round_trip_handles_optimized_transfers_and_branches() {
             let asm = dir.0.join(format!("{arch}-{opt}.s"));
             let executable = dir.0.join(format!("{arch}-{opt}"));
             assert!(
-                Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+                Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
                     .args(["--target", target, "-S", opt])
                     .arg(&source)
                     .arg("-o")
@@ -535,7 +681,7 @@ fn linux_and_windows_assembly_can_be_cross_assembled() {
         for opt in ["-O0", "-O2"] {
             let assembly = dir.0.join(format!("{target}-{opt}.s"));
             let object = dir.0.join(format!("{target}-{opt}.o"));
-            let compiled = Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+            let compiled = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
                 .args(["--target", target, "-S", opt])
                 .arg(&source)
                 .arg("-o")
@@ -593,8 +739,8 @@ fn transfer_boundary_failure_preserves_preceding_cell_decrement() {
     let harness = dir.0.join("harness.c");
     fs::write(&harness, include_str!("transfer_error_harness.c")).unwrap();
     for (target, arch) in [
-        (bfcompile::Target::Aarch64Darwin, "arm64"),
-        (bfcompile::Target::X86_64Darwin, "x86_64"),
+        (bfcompiler::Target::Aarch64Darwin, "arm64"),
+        (bfcompiler::Target::X86_64Darwin, "x86_64"),
     ] {
         for optimize in [false, true] {
             for (index, source) in [b"+[-<+>]".as_slice(), b"+[->+<]".as_slice()]
@@ -605,7 +751,7 @@ fn transfer_boundary_failure_preserves_preceding_cell_decrement() {
                 let executable = dir.0.join(format!("{arch}-{optimize}-{index}"));
                 fs::write(
                     &object,
-                    bfcompile::compile_object_for(source, optimize, target).unwrap(),
+                    bfcompiler::compile_object_for(source, optimize, target).unwrap(),
                 )
                 .unwrap();
                 let linked = Command::new("cc")

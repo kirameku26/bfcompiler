@@ -10,7 +10,7 @@ fn transfer_loop_sample() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bfcompile-perf-{}-{stamp}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("bfcompiler-perf-{}-{stamp}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let source = dir.join("sample.bf");
     std::fs::write(&source, b"-[>-[>-[->+<]<-]<-]".repeat(10)).unwrap();
@@ -20,7 +20,7 @@ fn transfer_loop_sample() {
         } else {
             format!("sample-{opt}")
         });
-        let result = Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+        let result = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
             .arg(opt)
             .arg(&source)
             .arg("-o")

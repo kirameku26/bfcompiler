@@ -1,6 +1,71 @@
 use super::MachineCode;
 use std::fmt::Write;
 
+/// Render configured programs without changing encoded instruction sizes.
+pub fn render_configured(code: &MachineCode, target: crate::Target) -> String {
+    use crate::Target;
+    let darwin = matches!(target, Target::Aarch64Darwin | Target::X86_64Darwin);
+    let arm = matches!(target, Target::Aarch64Darwin | Target::Aarch64Linux);
+    let riscv = target == Target::Riscv64Linux;
+    let prefix = if darwin { "_" } else { "" };
+    let mut out = String::new();
+    if riscv {
+        out.push_str(".option norvc\n.option norelax\n");
+    }
+    writeln!(
+        out,
+        ".text\n.p2align 2\n.globl {prefix}bf_program\n{prefix}bf_program:"
+    )
+    .unwrap();
+    let mut offset = 0;
+    while offset < code.bytes.len() {
+        let call_offset = if arm || riscv { offset } else { offset + 1 };
+        if let Some(r) = code
+            .relocations
+            .iter()
+            .find(|r| r.offset as usize == call_offset)
+        {
+            writeln!(
+                out,
+                "    {} {prefix}{}",
+                if arm { "bl" } else { "call" },
+                r.symbol.trim_start_matches('_')
+            )
+            .unwrap();
+            offset += if arm {
+                4
+            } else if riscv {
+                8
+            } else {
+                5
+            };
+        } else if arm || riscv {
+            let word = u32::from_le_bytes(code.bytes[offset..offset + 4].try_into().unwrap());
+            writeln!(out, "    .long 0x{word:08x}").unwrap();
+            offset += 4;
+        } else {
+            writeln!(out, "    .byte 0x{:02x}", code.bytes[offset]).unwrap();
+            offset += 1;
+        }
+    }
+    if let Some([version, tape_size, cell_bits, encoding]) = code.config_words() {
+        writeln!(
+            out,
+            ".p2align 2, 0\n.globl {prefix}bf_config\n{prefix}bf_config:\n    .long {version}, {tape_size}, {cell_bits}, {encoding}"
+        )
+        .unwrap();
+    }
+    if !darwin && target != Target::X86_64WindowsGnu {
+        writeln!(
+            out,
+            ".section .note.GNU-stack,\"\",{}progbits",
+            if arm { "%" } else { "@" }
+        )
+        .unwrap();
+    }
+    out
+}
+
 /// Render the actual encoded instructions, preserving external relocations.
 pub fn render(code: &MachineCode) -> String {
     let mut out = String::from(".text\n.p2align 2\n.globl _bf_program\n_bf_program:\n");

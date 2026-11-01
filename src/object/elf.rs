@@ -46,13 +46,23 @@ fn sym(out: &mut Vec<u8>, name: u32, info: u8, section: u16, value: u64, size: u
 }
 
 pub fn write_object(code: &MachineCode, arm64: bool) -> Result<Vec<u8>, String> {
+    write_object_for(code, if arm64 { 183 } else { 62 })
+}
+
+pub fn write_object_for(code: &MachineCode, machine: u16) -> Result<Vec<u8>, String> {
+    let arm64 = machine == 183;
+    let riscv = machine == 243;
+    let section_bytes = code.section_bytes();
     let mut out = vec![0; 64];
     let text = out.len();
-    out.extend_from_slice(&code.bytes);
+    out.extend_from_slice(&section_bytes);
     align(&mut out, 8);
     let rela = out.len();
     for r in &code.relocations {
-        if r.offset as usize + 4 > code.bytes.len() {
+        if (r.offset as usize)
+            .checked_add(if riscv { 8 } else { 4 })
+            .is_none_or(|end| end > code.bytes.len())
+        {
             return Err("invalid relocation offset".into());
         }
         let sym = match r.symbol {
@@ -61,15 +71,28 @@ pub fn write_object(code: &MachineCode, arm64: bool) -> Result<Vec<u8>, String> 
             _ => return Err(format!("unknown symbol {}", r.symbol)),
         };
         u64le(&mut out, r.offset.into());
-        u64le(&mut out, (sym << 32) | if arm64 { 283 } else { 4 });
-        u64le(&mut out, if arm64 { 0 } else { (-4i64) as u64 });
+        u64le(
+            &mut out,
+            (sym << 32)
+                | if arm64 {
+                    283
+                } else if riscv {
+                    19
+                } else {
+                    4
+                },
+        );
+        u64le(&mut out, if arm64 || riscv { 0 } else { (-4i64) as u64 });
     }
     let symtab = out.len();
     sym(&mut out, 0, 0, 0, 0, 0);
     sym(&mut out, 1, 0x12, 1, 0, code.bytes.len() as u64);
     sym(&mut out, 12, 0x10, 0, 0, 0);
     sym(&mut out, 21, 0x10, 0, 0, 0);
-    let strings = b"\0bf_program\0bf_input\0bf_output\0";
+    if code.config.is_some() {
+        sym(&mut out, 31, 0x11, 1, code.config_offset() as u64, 16);
+    }
+    let strings = b"\0bf_program\0bf_input\0bf_output\0bf_config\0";
     let strtab = out.len();
     out.extend_from_slice(strings);
     let names = b"\0.text\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0";
@@ -84,10 +107,10 @@ pub fn write_object(code: &MachineCode, arm64: bool) -> Result<Vec<u8>, String> 
         1,
         6,
         text as u64,
-        code.bytes.len() as u64,
+        section_bytes.len() as u64,
         0,
         0,
-        if arm64 { 4 } else { 1 },
+        if arm64 || riscv { 4 } else { 1 },
         0,
     );
     section(
@@ -102,7 +125,18 @@ pub fn write_object(code: &MachineCode, arm64: bool) -> Result<Vec<u8>, String> 
         8,
         24,
     );
-    section(&mut out, 18, 2, 0, symtab as u64, 96, 4, 1, 8, 24);
+    section(
+        &mut out,
+        18,
+        2,
+        0,
+        symtab as u64,
+        if code.config.is_some() { 120 } else { 96 },
+        4,
+        1,
+        8,
+        24,
+    );
     section(
         &mut out,
         26,
@@ -131,12 +165,12 @@ pub fn write_object(code: &MachineCode, arm64: bool) -> Result<Vec<u8>, String> 
     let mut header = Vec::new();
     header.extend(b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0");
     u16le(&mut header, 1);
-    u16le(&mut header, if arm64 { 183 } else { 62 });
+    u16le(&mut header, machine);
     u32le(&mut header, 1);
     u64le(&mut header, 0);
     u64le(&mut header, 0);
     u64le(&mut header, shtab as u64);
-    u32le(&mut header, 0);
+    u32le(&mut header, if riscv { 4 } else { 0 });
     u16le(&mut header, 64);
     u16le(&mut header, 0);
     u16le(&mut header, 0);

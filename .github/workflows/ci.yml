@@ -42,6 +42,76 @@ jobs:
       - name: Clippy
         run: cargo +stable clippy --locked --all-targets -- -D warnings
 
+  linux-cross:
+    name: Linux cross (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: i686
+            compiler: gcc-i686-linux-gnu
+            libc: libc6-dev-i386-cross
+          - target: riscv64
+            compiler: gcc-riscv64-linux-gnu
+            libc: libc6-dev-riscv64-cross
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install cross toolchain and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user ${{ matrix.compiler }} ${{ matrix.libc }}
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cross-compile and run Linux programs
+        env:
+          BFC_TEST_LINUX_CROSS: ${{ matrix.target }}
+        run: cargo +stable test --locked --test cross_linux -- --nocapture
+
+  macos:
+    name: macOS (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # The ARM64 E2E suite also executes Intel binaries.
+      - name: Ensure Rosetta is available
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          if ! arch -x86_64 /usr/bin/true; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -x86_64 /usr/bin/true
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --component rustfmt --component clippy
+          rustup target add --toolchain stable ${{ matrix.target }}
+
+      - name: Check formatting
+        run: rustup run stable cargo fmt --check
+
+      - name: Test
+        run: rustup run stable cargo test --locked --all-targets --target ${{ matrix.target }}
+
+      - name: Clippy
+        run: rustup run stable cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+
   windows:
     name: Windows x86-64 (GNU)
     runs-on: windows-2022

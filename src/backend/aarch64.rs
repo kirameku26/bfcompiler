@@ -1,13 +1,31 @@
 use super::{MachineCode, Relocation};
+use crate::CellWidth;
 use crate::ir::{Op, Program};
 
 struct Emitter {
     words: Vec<u32>,
     relocations: Vec<Relocation>,
     error_branches: Vec<usize>,
+    width: CellWidth,
 }
 
 impl Emitter {
+    fn load(&mut self, register: u32) {
+        let base = match self.width {
+            CellWidth::Bits8 => 0x3940_0260,
+            CellWidth::Bits16 => 0x7940_0260,
+            CellWidth::Bits32 => 0xb940_0260,
+        };
+        self.emit(base | register);
+    }
+    fn store(&mut self, register: u32) {
+        let base = match self.width {
+            CellWidth::Bits8 => 0x3900_0260,
+            CellWidth::Bits16 => 0x7900_0260,
+            CellWidth::Bits32 => 0xb900_0260,
+        };
+        self.emit(base | register);
+    }
     fn emit(&mut self, word: u32) -> usize {
         self.words.push(word);
         self.words.len() - 1
@@ -51,7 +69,8 @@ impl Emitter {
                 Op::Move { amount, .. } => {
                     let mut remaining = amount.unsigned_abs();
                     while remaining != 0 {
-                        let chunk = remaining.min(4095) as u32;
+                        let cells = remaining.min(4095 / u64::from(self.width.bytes()));
+                        let chunk = cells as u32 * self.width.bytes();
                         if *amount > 0 {
                             self.emit(0xcb13_02a8); // sub x8, x21, x19 (space to end)
                         } else {
@@ -71,19 +90,25 @@ impl Emitter {
                                 0xd100_0273
                             }) | (chunk << 10),
                         );
-                        remaining -= u64::from(chunk);
+                        remaining -= cells;
                     }
                 }
                 Op::Add { amount, .. } => {
-                    let value = amount.rem_euclid(256) as u32;
+                    let value = amount.rem_euclid(self.width.modulus()) as u32;
                     if value != 0 {
-                        self.emit(0x3940_0268); // ldrb w8, [x19]
-                        self.emit(0x1100_0108 | (value << 10)); // add w8, w8, #value
-                        self.emit(0x3900_0268); // strb w8, [x19]
+                        self.load(8);
+                        if value <= 4095 {
+                            self.emit(0x1100_0108 | (value << 10));
+                        } else {
+                            self.emit(0x5280_0009 | ((value & 0xffff) << 5));
+                            self.emit(0x72a0_0009 | ((value >> 16) << 5));
+                            self.emit(0x0b09_0108); // add w8,w8,w9
+                        }
+                        self.store(8);
                     }
                 }
                 Op::Clear { .. } => {
-                    self.emit(0x3900_027f);
+                    self.store(31);
                 } // strb wzr, [x19]
                 Op::Transfer {
                     offset,
@@ -93,30 +118,30 @@ impl Emitter {
                     if !matches!(offset, -1 | 1) || !matches!(factor, -1 | 1) {
                         return Err("invalid transfer operation".into());
                     }
-                    self.emit(0x3940_026a); // ldrb w10, [x19]
+                    self.load(10);
                     let skip = self.emit(0x3400_000a); // cbz w10, done
                     self.emit(0x5100_0548); // sub w8, w10, #1
-                    self.emit(0x3900_0268); // preserve the first decrement if movement fails
+                    self.store(8); // preserve the first decrement if movement fails
                     self.emit_ops(&[Op::Move {
                         amount: i64::from(*offset),
                         pos: *pos,
                     }])?;
-                    self.emit(0x3940_0268); // ldrb w8, [x19]
+                    self.load(8);
                     self.emit(if *factor == 1 {
                         0x0b0a_0108
                     } else {
                         0x4b0a_0108
                     }); // add/sub w8, w8, w10
-                    self.emit(0x3900_0268); // strb w8, [x19]
+                    self.store(8);
                     self.emit_ops(&[Op::Move {
                         amount: -i64::from(*offset),
                         pos: *pos,
                     }])?;
-                    self.emit(0x3900_027f); // strb wzr, [x19]
+                    self.store(31);
                     self.patch_imm19(skip, self.offset())?;
                 }
                 Op::Output { .. } => {
-                    self.emit(0x3940_0260); // ldrb w0, [x19]
+                    self.load(0);
                     self.call("_bf_output");
                     self.emit(0x7100_001f); // cmp w0, #0
                     self.emit(0x5400_0040); // b.eq +8
@@ -132,11 +157,11 @@ impl Emitter {
                     self.emit(0x5280_0000); // mov w0, #0
                     let store = self.words.len() * 4;
                     self.patch_imm19(not_eof, store)?;
-                    self.emit(0x3900_0260); // strb w0, [x19]
+                    self.store(0);
                 }
                 Op::Loop { body, .. } => {
                     let test = self.words.len();
-                    self.emit(0x3940_0268); // ldrb w8, [x19]
+                    self.load(8);
                     let exit = self.emit(0x3400_0008); // cbz w8, exit
                     self.emit_ops(body)?;
                     let back = self.emit(0x1400_0000); // b test
@@ -151,10 +176,15 @@ impl Emitter {
 }
 
 pub fn compile(program: &Program) -> Result<MachineCode, String> {
+    compile_with_width(program, CellWidth::Bits8)
+}
+
+pub fn compile_with_width(program: &Program, width: CellWidth) -> Result<MachineCode, String> {
     let mut e = Emitter {
         words: Vec::new(),
         relocations: Vec::new(),
         error_branches: Vec::new(),
+        width,
     };
     e.emit(0xa9bd_7bfd); // stp x29, x30, [sp, #-48]!
     e.emit(0xa901_53f3); // stp x19, x20, [sp, #16]
@@ -182,6 +212,8 @@ pub fn compile(program: &Program) -> Result<MachineCode, String> {
     Ok(MachineCode {
         bytes,
         relocations: e.relocations,
+        config: None,
+        output_encoding: None,
     })
 }
 

@@ -21,9 +21,11 @@ pub fn write_object(machine: &MachineCode) -> Result<Vec<u8>, String> {
 }
 
 pub fn write_object_for(machine: &MachineCode, x86: bool) -> Result<Vec<u8>, String> {
+    let section_bytes = machine.section_bytes();
+    let extra = u32::from(machine.config.is_some());
     let mut symbols = BTreeMap::new();
-    symbols.insert("_bf_input", 2u32);
-    symbols.insert("_bf_output", 3u32);
+    symbols.insert("_bf_input", 2u32 + extra);
+    symbols.insert("_bf_output", 3u32 + extra);
     for r in &machine.relocations {
         if !symbols.contains_key(r.symbol) {
             return Err(format!("unknown external symbol {}", r.symbol));
@@ -35,12 +37,12 @@ pub fn write_object_for(machine: &MachineCode, x86: bool) -> Result<Vec<u8>, Str
 
     const HEADER_AND_COMMANDS: usize = 312;
     let code_offset = HEADER_AND_COMMANDS;
-    let reloc_offset = align4(code_offset + machine.bytes.len());
+    let reloc_offset = align4(code_offset + section_bytes.len());
     let reloc_size = machine.relocations.len() * 8;
     let sym_offset = reloc_offset + reloc_size;
-    let symbol_count = 4usize;
+    let symbol_count = 4usize + extra as usize;
     let string_offset = sym_offset + symbol_count * 16;
-    let strings = b"\0ltmp0\0_bf_program\0_bf_input\0_bf_output\0";
+    let strings = b"\0ltmp0\0_bf_program\0_bf_input\0_bf_output\0_bf_config\0";
 
     let mut out = Vec::with_capacity(string_offset + strings.len());
     // mach_header_64
@@ -57,9 +59,9 @@ pub fn write_object_for(machine: &MachineCode, x86: bool) -> Result<Vec<u8>, Str
     u32le(&mut out, 152);
     name16(&mut out, b"");
     u64le(&mut out, 0);
-    u64le(&mut out, machine.bytes.len() as u64);
+    u64le(&mut out, section_bytes.len() as u64);
     u64le(&mut out, code_offset as u64);
-    u64le(&mut out, machine.bytes.len() as u64);
+    u64le(&mut out, section_bytes.len() as u64);
     u32le(&mut out, 7);
     u32le(&mut out, 7);
     u32le(&mut out, 1);
@@ -67,7 +69,7 @@ pub fn write_object_for(machine: &MachineCode, x86: bool) -> Result<Vec<u8>, Str
     name16(&mut out, b"__text");
     name16(&mut out, b"__TEXT");
     u64le(&mut out, 0);
-    u64le(&mut out, machine.bytes.len() as u64);
+    u64le(&mut out, section_bytes.len() as u64);
     u32le(&mut out, code_offset as u32);
     u32le(&mut out, 2);
     u32le(&mut out, reloc_offset as u32);
@@ -93,14 +95,14 @@ pub fn write_object_for(machine: &MachineCode, x86: bool) -> Result<Vec<u8>, Str
     // LC_DYSYMTAB
     u32le(&mut out, 0xb);
     u32le(&mut out, 80);
-    for v in [0, 1, 1, 1, 2, 2] {
+    for v in [0, 1, 1, 1 + extra, 2 + extra, 2] {
         u32le(&mut out, v);
     }
     for _ in 0..12 {
         u32le(&mut out, 0);
     }
     debug_assert_eq!(out.len(), HEADER_AND_COMMANDS);
-    out.extend(&machine.bytes);
+    out.extend(&section_bytes);
     out.resize(reloc_offset, 0);
     // ld expects section relocations in descending address order.
     let mut relocs = machine.relocations.clone();
@@ -111,12 +113,12 @@ pub fn write_object_for(machine: &MachineCode, x86: bool) -> Result<Vec<u8>, Str
         u32le(&mut out, word);
     }
     // nlist_64: local section symbol, external definition, two undefined symbols.
-    for (strx, kind, sect, value) in [
-        (1, 0x0e, 1, 0u64),
-        (7, 0x0f, 1, 0),
-        (19, 0x01, 0, 0),
-        (29, 0x01, 0, 0),
-    ] {
+    let mut entries = vec![(1, 0x0e, 1, 0u64), (7, 0x0f, 1, 0)];
+    if machine.config.is_some() {
+        entries.push((40, 0x0f, 1, machine.config_offset() as u64));
+    }
+    entries.extend([(19, 0x01, 0, 0), (29, 0x01, 0, 0)]);
+    for (strx, kind, sect, value) in entries {
         u32le(&mut out, strx);
         out.push(kind);
         out.push(sect);

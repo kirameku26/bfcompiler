@@ -67,7 +67,7 @@ impl TestDir {
             .unwrap()
             .as_nanos();
         let dir = std::env::temp_dir().join(format!(
-            "bfcompile-reference-{}-{stamp}-{}",
+            "bfcompiler-reference-{}-{stamp}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -83,15 +83,17 @@ impl Drop for TestDir {
 
 #[test]
 fn native_programs_match_reference_with_and_without_optimization() {
-    let Some(host) = bfcompile::Target::host_default() else {
+    let Some(host) = bfcompiler::Target::host_default() else {
         return;
     };
     let targets: Vec<&str> = match host {
-        bfcompile::Target::Aarch64Darwin => vec!["aarch64-apple-darwin"],
-        bfcompile::Target::X86_64Darwin => vec!["x86_64-apple-darwin"],
-        bfcompile::Target::Aarch64Linux => vec!["aarch64-unknown-linux-gnu"],
-        bfcompile::Target::X86_64Linux => vec!["x86_64-unknown-linux-gnu"],
-        bfcompile::Target::X86_64WindowsGnu => vec!["x86_64-pc-windows-gnu"],
+        bfcompiler::Target::Aarch64Darwin => vec!["aarch64-apple-darwin"],
+        bfcompiler::Target::X86_64Darwin => vec!["x86_64-apple-darwin"],
+        bfcompiler::Target::Aarch64Linux => vec!["aarch64-unknown-linux-gnu"],
+        bfcompiler::Target::X86_64Linux => vec!["x86_64-unknown-linux-gnu"],
+        bfcompiler::Target::I386Linux => vec!["i686-unknown-linux-gnu"],
+        bfcompiler::Target::Riscv64Linux => vec!["riscv64gc-unknown-linux-gnu"],
+        bfcompiler::Target::X86_64WindowsGnu => vec!["x86_64-pc-windows-gnu"],
     };
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let targets = {
@@ -146,7 +148,7 @@ fn native_programs_match_reference_with_and_without_optimization() {
                     if cfg!(windows) { ".exe" } else { "" }
                 ));
                 std::fs::write(&source_path, source).unwrap();
-                let compiled = Command::new(env!("CARGO_BIN_EXE_bfcompile"))
+                let compiled = Command::new(env!("CARGO_BIN_EXE_bfcompiler"))
                     .args([
                         "--target",
                         target,
