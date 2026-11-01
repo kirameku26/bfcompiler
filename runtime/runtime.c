@@ -104,7 +104,11 @@ int main(void) {
             bf_config.tape_size > INT32_MAX ||
             (bf_config.cell_bits != 8 && bf_config.cell_bits != 16 && bf_config.cell_bits != 32) ||
             bf_config.output_encoding > (bf_config.version == 1 ? 1u : 5u)) {
-            fputs("brainfuck runtime: invalid embedded configuration\n", stderr);
+            fprintf(stderr,
+                    "brainfuck runtime: invalid embedded configuration "
+                    "(version=%lu, tape_size=%lu, cell_bits=%lu, output_encoding=%lu)\n",
+                    (unsigned long)bf_config.version, (unsigned long)bf_config.tape_size,
+                    (unsigned long)bf_config.cell_bits, (unsigned long)bf_config.output_encoding);
             return 1;
         }
         tape_size = bf_config.tape_size;
