@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "A Brainfuck AOT compiler for ARM64, x86-64, i386, and RISC-V 64"
 license = "MIT"
+repository = "https://github.com/kirameku26/bfcompiler"
+readme = "README.md"
+keywords = ["brainfuck", "compiler", "aot"]
+categories = ["command-line-utilities"]
 
 [lib]
 name = "bfcompiler"
