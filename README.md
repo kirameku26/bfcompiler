@@ -6,37 +6,64 @@ English | [日本語](README.ja.md)
 
 ## Features
 
-- Direct machine-code and Mach-O, ELF, or COFF object generation.
+- Machine-code and Mach-O, ELF, or COFF object generation from Brainfuck code.
 - Standard and extended modes, with configurable tape length, cell width, and output encoding in extended mode.
 - Arithmetic, pointer-movement, and loop optimizations, plus assembly output.
 
 ## Requirements
 
-- Build and installation: Rust and Cargo with Rust 2024 edition support.
-- Executable generation: a C compiler and linker for the target platform.
+- Build and installation: stable Rust and Cargo with Rust 2024 edition support.
+- Executable generation and E2E tests: a C compiler, linker, C runtime, and development headers for the target platform.
+
+| Host | Required toolchain |
+| --- | --- |
+| Linux | GCC (`cc`), linker, and libc development headers; `build-essential` on Ubuntu/Debian |
+| macOS | Xcode Command Line Tools (Apple Clang, linker, and macOS SDK) |
+| Windows x86-64 | MinGW-w64 GCC and the Rust GNU toolchain (`stable-x86_64-pc-windows-gnu`); put `gcc` on `PATH` and set `BFC_CC=gcc` |
+
+See the [fixture setup instructions](tests/fixtures/README.md) for test commands and Windows linker settings.
 
 ## Installation
 
-Install from the project directory:
+Install from the project directory using the commands for your platform.
+
+Linux/macOS:
 
 ```sh
 cargo install --path .
 bfcompiler --version
 ```
 
-Add Cargo's bin directory to your `PATH` (normally `~/.cargo/bin`, or the Cargo bin directory in your Windows user profile). The installed compiler can be used without the source tree.
+Windows (PowerShell), after completing the [MinGW-w64 and Rust GNU setup](tests/fixtures/README.md#windows-setup):
+
+```powershell
+$env:BFC_CC = "gcc"
+$env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "gcc"
+cargo +stable-x86_64-pc-windows-gnu install --path .
+bfcompiler --version
+```
+
+Add Cargo's bin directory to your `PATH` (normally `~/.cargo/bin` on Linux/macOS or `%USERPROFILE%\.cargo\bin` on Windows). The installed compiler can be used without the source tree.
 
 ## Usage
 
-Create a program that prints `A`, then compile and run it:
+Create a program that prints `Hello World!`, then compile and run it. On Linux/macOS:
 
 ```sh
-printf '++++++++[>++++++++<-]>+.' > hello.bf
+printf '++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>.' > hello.bf
 bfcompiler hello.bf -o hello
 ./hello
 ```
 
-If `--target` is omitted, the compiler selects the host target. On Windows, use `-o hello.exe` and run `hello.exe`.
+On Windows (PowerShell), copy the sample from the repository root and run it:
+
+```powershell
+Copy-Item tests/fixtures/standard/hello_world.bf hello.bf
+bfcompiler hello.bf -o hello.exe
+.\hello.exe
+```
+
+If `--target` is omitted, the compiler selects the host target.
 
 ### Supported targets
 
@@ -52,8 +79,7 @@ If `--target` is omitted, the compiler selects the host target. On Windows, use 
 
 The aliases `i386-unknown-linux-gnu` and `riscv64-unknown-linux-gnu` are also accepted.
 
-- Windows objects do not support stack unwinding through generated functions.
-- RISC-V jumps beyond approximately ±1 MiB produce a compilation error.
+Windows objects do not support stack unwinding through generated functions. RISC-V jumps beyond approximately ±1 MiB produce a compilation error.
 
 ### Object and assembly output
 
@@ -64,11 +90,16 @@ bfcompiler -c hello.bf -o hello.o
 bfcompiler -S -O2 hello.bf -o hello.s
 ```
 
-Assembly for i386, RISC-V, and extended mode uses encoded instruction directives and symbolic calls. From the source tree, assemble and link host-target output with:
+Assembly for i386, RISC-V, and extended mode uses encoded instruction directives and symbolic calls. To manually link host-target output with the runtime, run from the source tree:
 
 ```sh
+# Object
+cc hello.o runtime/runtime.c -o hello
+# Assembly
 cc hello.s runtime/runtime.c -o hello
 ```
+
+On Windows, replace `cc` with `gcc` and the output name with `hello.exe`. Extended objects and assembly retain the tape length, cell width, and output encoding; no extra runtime defines are needed.
 
 ### Select a target
 
@@ -98,9 +129,11 @@ Running an Intel Mac executable on an Apple Silicon Mac requires Rosetta.
 
 ### Language modes
 
+Use `--mode extended` to change the tape length, cell width, or output encoding.
+
 | Setting | `standard` (default) | `extended` |
 | --- | --- | --- |
-| Tape | Fixed 30,000 cells | Default 1,000,000 cells; configurable |
+| Tape | 30,000 cells | Default 1,000,000 cells; configurable |
 | Cell width | 8 bits | 8 (default), 16, or 32 bits |
 | Output | Bytes | Bytes, UTF-8, UTF-16, or UTF-32 encoding of each cell value |
 | Output formats | Executable, object, assembly | Executable, object, assembly |
@@ -109,18 +142,21 @@ Both modes share these semantics:
 
 - Cells are zero-initialized unsigned integers that wrap modulo 2 to the power of the cell width.
 - Bytes other than the eight instructions are ignored as comments; unmatched brackets are errors.
-- Input reads bytes and sets the current cell to zero on EOF. Windows uses binary standard I/O.
+- Input reads one byte regardless of cell width and sets the current cell to zero on EOF. Windows uses binary standard I/O.
 - Out-of-bounds pointer movement is a runtime error with exit code 2.
 
-Select extended mode to change the tape length, cell width, or output encoding:
+Compile `hello.bf` to `hello` in extended mode with 2,000,000 cells, 32-bit cells, and UTF-8 output:
 
 ```sh
 bfcompiler --mode extended --tape-size 2000000 --cell-bits 32 --output-encoding utf-8 hello.bf -o hello
 ```
 
-`--tape-size` accepts 1 to 2,147,483,647 cells, subject to the target address space and available memory. `--cell-bits` selects a shared width for the entire tape; `,` still reads one byte into a cell.
+`--tape-size` accepts 1 to 2,147,483,647 cells, subject to the target address space and available memory.
+`--cell-bits` selects a shared width for the entire tape.
 
-In `bytes` mode, `.` outputs the low 8 bits. Unicode output modes encode the cell value as a Unicode scalar value. Surrogates and values above U+10FFFF cause a runtime error with exit code 2. Use `bytes` for programs that already produce encoded byte sequences.
+### Output encoding
+
+Unicode output modes encode the cell value as a Unicode scalar value. Surrogates and values above U+10FFFF cause a runtime error with exit code 2. Use `bytes` for programs that already produce encoded byte sequences.
 
 | `--output-encoding` | Output |
 | --- | --- |
@@ -131,13 +167,17 @@ In `bytes` mode, `.` outputs the low 8 bits. Unicode output modes encode the cel
 | `utf-32`, `utf-32le` | UTF-32, little-endian |
 | `utf-32be` | UTF-32, big-endian |
 
-No BOM is added automatically. Byte order is independent of the target CPU. UTF-16 encodes supplementary characters as surrogate pairs; use 32-bit cells for values above U+FFFF. For example:
+No BOM is added automatically.
+Byte order is independent of the target CPU.
+UTF-16 encodes supplementary characters as surrogate pairs.
+
+Use 32-bit cells for values above U+FFFF.
+
+Compile `hello.bf` to `hello` in extended mode with 32-bit cells and UTF-16LE output:
 
 ```sh
 bfcompiler --mode extended --cell-bits 32 --output-encoding utf-16le hello.bf -o hello
 ```
-
-Extension options require `--mode extended`. Executables, objects, and assembly retain the tape length, cell width, and output encoding. For manual linking, use `cc hello.o runtime/runtime.c -o hello` (or `hello.s`); no extra runtime defines are needed for extended output.
 
 ### Options
 
@@ -173,9 +213,10 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-The binary is `target/release/bfcompiler` (`bfcompiler.exe` on Windows). Tests compare generated programs against a reference interpreter. See [AGENTS.md](AGENTS.md) for development guidelines and optional cross-target checks.
+The binary is `target/release/bfcompiler` (`bfcompiler.exe` on Windows). Tests compare generated programs against a reference interpreter.
 
-Run all [Brainfuck fixtures](tests/fixtures/README.md) with `cargo test --test fixtures -- --nocapture`. New `.bf` files with matching `.out` files are tested automatically at `-O0` and `-O2`.
+Run all [Brainfuck fixtures](tests/fixtures/README.md) with `cargo test --test fixtures -- --nocapture`.
+New `.bf` files with matching `.out` files under `tests/fixtures` are tested automatically at `-O0` and `-O2`.
 
 Run the transfer-loop timing sample with `cargo test --test performance -- --ignored --nocapture`; it includes process startup.
 
