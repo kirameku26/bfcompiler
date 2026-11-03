@@ -1,5 +1,8 @@
 # bfcompiler
 
+[![crates.io](https://img.shields.io/crates/v/bfcompiler.svg)](https://crates.io/crates/bfcompiler)
+[![CI](https://github.com/kirameku26/bfcompiler/actions/workflows/ci.yml/badge.svg)](https://github.com/kirameku26/bfcompiler/actions/workflows/ci.yml)
+
 Compiles Brainfuck directly to ARM64, x86-64, i386, or RISC-V 64 machine code. It can emit objects or assembly and produce executables using the target platform's toolchain.
 
 English | [日本語](README.ja.md)
@@ -25,12 +28,12 @@ See the [fixture setup instructions](tests/fixtures/README.md) for test commands
 
 ## Installation
 
-Install from the project directory using the commands for your platform.
+Install the published package from [crates.io](https://crates.io/crates/bfcompiler). Cargo downloads and builds it; a local checkout is not required.
 
 Linux/macOS:
 
 ```sh
-cargo install --path .
+cargo install bfcompiler --locked
 bfcompiler --version
 ```
 
@@ -39,11 +42,21 @@ Windows (PowerShell), after completing the [MinGW-w64 and Rust GNU setup](tests/
 ```powershell
 $env:BFC_CC = "gcc"
 $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "gcc"
-cargo +stable-x86_64-pc-windows-gnu install --path .
+cargo +stable-x86_64-pc-windows-gnu install bfcompiler --locked
 bfcompiler --version
 ```
 
 Add Cargo's bin directory to your `PATH` (normally `~/.cargo/bin` on Linux/macOS or `%USERPROFILE%\.cargo\bin` on Windows). The installed compiler can be used without the source tree.
+
+### From source
+
+To install from a local checkout, run from the project directory:
+
+```sh
+cargo install --path . --locked
+```
+
+On Windows, use `cargo +stable-x86_64-pc-windows-gnu install --path . --locked` with the GNU linker settings above.
 
 ## Usage
 
@@ -55,10 +68,10 @@ bfcompiler hello.bf -o hello
 ./hello
 ```
 
-On Windows (PowerShell), copy the sample from the repository root and run it:
+On Windows (PowerShell), create the same program and run it:
 
 ```powershell
-Copy-Item tests/fixtures/standard/hello_world.bf hello.bf
+Set-Content -Path hello.bf -Encoding ascii -Value '++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>.'
 bfcompiler hello.bf -o hello.exe
 .\hello.exe
 ```

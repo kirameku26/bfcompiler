@@ -1,5 +1,8 @@
 # bfcompiler
 
+[![crates.io](https://img.shields.io/crates/v/bfcompiler.svg)](https://crates.io/crates/bfcompiler)
+[![CI](https://github.com/kirameku26/bfcompiler/actions/workflows/ci.yml/badge.svg)](https://github.com/kirameku26/bfcompiler/actions/workflows/ci.yml)
+
 BrainfuckのコードをARM64・x86-64・i386・RISC-V 64の機械語へコンパイルします。オブジェクトやアセンブリの出力に加え、対象環境のツールチェーンで実行ファイルを生成できます。
 
 [English](README.md) | 日本語
@@ -25,12 +28,12 @@ BrainfuckのコードをARM64・x86-64・i386・RISC-V 64の機械語へコン�
 
 ## インストール
 
-プロジェクトのディレクトリから、環境に応じてインストールします。
+[crates.io](https://crates.io/crates/bfcompiler) の公開パッケージをインストールします。Cargoがダウンロードしてビルドするため、リポジトリの取得は不要です。
 
 Linux・macOS:
 
 ```sh
-cargo install --path .
+cargo install bfcompiler --locked
 bfcompiler --version
 ```
 
@@ -39,11 +42,21 @@ Windows (PowerShell)では、[MinGW-w64とRust GNUの環境構築](tests/fixture
 ```powershell
 $env:BFC_CC = "gcc"
 $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "gcc"
-cargo +stable-x86_64-pc-windows-gnu install --path .
+cargo +stable-x86_64-pc-windows-gnu install bfcompiler --locked
 bfcompiler --version
 ```
 
 Cargoのbinディレクトリを `PATH` に追加してください(通常はLinux・macOSで `~/.cargo/bin`、Windowsで `%USERPROFILE%\.cargo\bin`)。インストール後はソースツリーなしで利用できます。
+
+### ソースからの導入
+
+ローカルのソースからインストールする場合は、プロジェクトのディレクトリで実行します。
+
+```sh
+cargo install --path . --locked
+```
+
+Windowsでは、上記のGNUリンカ設定で `cargo +stable-x86_64-pc-windows-gnu install --path . --locked` を実行します。
 
 ## 使い方
 
@@ -55,10 +68,10 @@ bfcompiler hello.bf -o hello
 ./hello
 ```
 
-Windows (PowerShell)では、リポジトリのルートからサンプルをコピーして実行します。
+Windows (PowerShell)では、同じプログラムを次のように作成して実行します。
 
 ```powershell
-Copy-Item tests/fixtures/standard/hello_world.bf hello.bf
+Set-Content -Path hello.bf -Encoding ascii -Value '++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>.'
 bfcompiler hello.bf -o hello.exe
 .\hello.exe
 ```
