@@ -1,6 +1,6 @@
 [package]
 name = "bfcompiler"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A Brainfuck AOT compiler for ARM64, x86-64, i386, and RISC-V 64"
 license = "MIT"
